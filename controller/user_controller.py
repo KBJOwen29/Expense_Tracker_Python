@@ -1,98 +1,322 @@
-from typing import List, Optional, Dict, Tuple
-from model.user_model import User
+import database.database as Database
+import model.user_model as User
 
-# In-memory store for users (simple, non-persistent)
-_users: List[User] = []
-_next_id = 1
+from datetime import datetime
 
-def _get_next_id() -> int:
-	global _next_id
-	nid = _next_id
-	_next_id += 1
-	return nid
 
-def _user_to_dict(user: User) -> Dict:
-	return {"id": user.id, "username": user.username, "email": user.email}
+# ==================================================
+# REGISTER USER
+# ==================================================
 
-def register_user(username: str, email: str, password: str) -> Tuple[bool, str, Optional[Dict]]:
-	"""Register a new user.
+def register_user(
+    username,
+    email,
+    password,
+    created_at
+):
 
-	Returns (success, message, user_dict).
-	"""
-	# simple uniqueness checks (case-insensitive)
-	for u in _users:
-		if u.username.lower() == username.lower():
-			return False, "Username already exists", None
-		if u.email.lower() == email.lower():
-			return False, "Email already registered", None
+    if not username.strip():
+        return False, "Username cannot be empty"
 
-	user = User(_get_next_id(), username, email, password)
-	_users.append(user)
-	return True, "User registered", _user_to_dict(user)
+    if not email.strip():
+        return False, "Email cannot be empty"
 
-def login_user(typed_username_or_email: str, password: str) -> Tuple[bool, str, Optional[Dict]]:
-	"""Authenticate a user by username or email and password.
+    if not password:
+        return False, "Password cannot be empty"
 
-	Returns (success, message, user_dict).
-	"""
-	for u in _users:
-		ok, msg = u.authenticate(typed_username_or_email, password)
-		if ok:
-			return True, "Login successful", _user_to_dict(u)
+    connection = Database.get_connection()
 
-	return False, "Invalid credentials", None
+    cursor = connection.cursor()
 
-def get_user(user_id: Optional[int] = None, username: Optional[str] = None, email: Optional[str] = None):
-	"""Retrieve a user by id, username, or email. If none provided, returns all users."""
-	if user_id is None and username is None and email is None:
-		return [_user_to_dict(u) for u in _users]
+    try:
 
-	for u in _users:
-		if user_id is not None and u.id == user_id:
-			return _user_to_dict(u)
-		if username is not None and u.username.lower() == username.lower():
-			return _user_to_dict(u)
-		if email is not None and u.email.lower() == email.lower():
-			return _user_to_dict(u)
+        cursor.execute("""
+            INSERT INTO users (
+                username,
+                email,
+                password,
+                created_at
+            )
+            VALUES (?, ?, ?, ?)
+        """, (
+            username,
+            email,
+            password,
+            created_at.isoformat()
+        ))
 
-	return None
+        connection.commit()
 
-def update_user(user_id: int, username: Optional[str] = None, email: Optional[str] = None, password: Optional[str] = None) -> Tuple[bool, str, Optional[Dict]]:
-	"""Update fields of a user. Returns (success, message, user_dict)."""
-	for u in _users:
-		if u.id == user_id:
-			# check uniqueness for username/email
-			if username and any(x.username.lower() == username.lower() and x.id != user_id for x in _users):
-				return False, "Username already taken", None
-			if email and any(x.email.lower() == email.lower() and x.id != user_id for x in _users):
-				return False, "Email already in use", None
+        user_id = cursor.lastrowid
 
-			if username:
-				u.username = username
-			if email:
-				u.email = email
-			if password:
-				u.password = password
+        return True, (
+            "User registered successfully.\n"
+            f"Your User ID is: {user_id}"
+        )
 
-			return True, "User updated", _user_to_dict(u)
+    except Exception as error:
 
-	return False, "User not found", None
+        connection.rollback()
 
-def delete_user(user_id: int) -> Tuple[bool, str]:
-	"""Delete a user by id. Returns (success, message)."""
-	global _users
-	for i, u in enumerate(_users):
-		if u.id == user_id:
-			_users.pop(i)
-			return True, "User deleted"
+        error_message = str(error).lower()
 
-	return False, "User not found"
+        if "username" in error_message:
+            return False, "Username already exists"
 
-__all__ = [
-	"register_user",
-	"login_user",
-	"get_user",
-	"update_user",
-	"delete_user",
-]
+        if "email" in error_message:
+            return False, "Email already exists"
 
+        return False, "Registration failed"
+
+    finally:
+
+        connection.close()
+
+
+# ==================================================
+# LOGIN USER
+# ==================================================
+
+def login_user(
+    username_or_email,
+    password
+):
+
+    connection = Database.get_connection()
+
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM users
+        WHERE LOWER(username) = LOWER(?)
+        OR LOWER(email) = LOWER(?)
+    """, (
+        username_or_email,
+        username_or_email
+    ))
+
+    row = cursor.fetchone()
+
+    connection.close()
+
+    if row is None:
+        return False, "Access Denied"
+
+    if row["password"] != password:
+        return False, "Access Denied"
+
+    return True, "Access Granted"
+
+
+# ==================================================
+# GET USER BY LOGIN
+# ==================================================
+
+def get_user_by_login(
+    username_or_email
+):
+
+    connection = Database.get_connection()
+
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM users
+        WHERE LOWER(username) = LOWER(?)
+        OR LOWER(email) = LOWER(?)
+    """, (
+        username_or_email,
+        username_or_email
+    ))
+
+    row = cursor.fetchone()
+
+    connection.close()
+
+    if row is None:
+        return False, "User not found"
+
+    user = User.User(
+        row["id"],
+        row["username"],
+        row["email"],
+        row["password"],
+        datetime.fromisoformat(
+            row["created_at"]
+        )
+    )
+
+    return True, user
+
+
+# ==================================================
+# GET USER
+# ==================================================
+
+def get_user(
+    user_id
+):
+
+    connection = Database.get_connection()
+
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM users
+        WHERE id = ?
+    """, (user_id,))
+
+    row = cursor.fetchone()
+
+    connection.close()
+
+    if row is None:
+        return False, "User not found"
+
+    user = User.User(
+        row["id"],
+        row["username"],
+        row["email"],
+        row["password"],
+        datetime.fromisoformat(
+            row["created_at"]
+        )
+    )
+
+    return True, user
+
+
+# ==================================================
+# UPDATE USER
+# ==================================================
+
+def update_user(
+    user_id,
+    username=None,
+    email=None,
+    password=None
+):
+
+    connection = Database.get_connection()
+
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT *
+        FROM users
+        WHERE id = ?
+    """, (user_id,))
+
+    row = cursor.fetchone()
+
+    if row is None:
+
+        connection.close()
+
+        return False, "User not found"
+
+    new_username = (
+        username
+        if username is not None
+        else row["username"]
+    )
+
+    new_email = (
+        email
+        if email is not None
+        else row["email"]
+    )
+
+    new_password = (
+        password
+        if password is not None
+        else row["password"]
+    )
+
+    try:
+
+        cursor.execute("""
+            UPDATE users
+            SET username = ?,
+                email = ?,
+                password = ?
+            WHERE id = ?
+        """, (
+            new_username,
+            new_email,
+            new_password,
+            user_id
+        ))
+
+        connection.commit()
+
+        return True, "User updated successfully"
+
+    except Exception as error:
+
+        connection.rollback()
+
+        error_message = str(error).lower()
+
+        if "username" in error_message:
+            return False, "Username already exists"
+
+        if "email" in error_message:
+            return False, "Email already exists"
+
+        return False, "Failed to update user"
+
+    finally:
+
+        connection.close()
+
+
+# ==================================================
+# DELETE USER
+# ==================================================
+
+def delete_user(
+    user_id
+):
+
+    connection = Database.get_connection()
+
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT id
+        FROM users
+        WHERE id = ?
+    """, (user_id,))
+
+    row = cursor.fetchone()
+
+    if row is None:
+
+        connection.close()
+
+        return False, "User not found"
+
+    try:
+
+        cursor.execute("""
+            DELETE FROM users
+            WHERE id = ?
+        """, (user_id,))
+
+        connection.commit()
+
+        return True, "User deleted successfully"
+
+    except Exception:
+
+        connection.rollback()
+
+        return False, "Failed to delete user"
+
+    finally:
+
+        connection.close()

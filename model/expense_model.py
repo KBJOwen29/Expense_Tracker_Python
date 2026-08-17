@@ -1,17 +1,17 @@
-class Income:
+class Expense:
     
     def __init__(
         self,
         id,
         user_id,
         amount,
-        source,
+        category,
         description,
         date
     ):
         self.id = id
         self.user_id = user_id
         self.amount = amount
-        self.source = source
+        self.category = category
         self.description = description
         self.date = date
